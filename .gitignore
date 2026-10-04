@@ -1,3 +1,4 @@
 build/
 run.log
 __pycache__/
+pub/
