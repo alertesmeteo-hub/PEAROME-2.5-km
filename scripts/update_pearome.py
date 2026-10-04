@@ -53,18 +53,25 @@ class Quota(Exception):
 def call(session: requests.Session, query: str, key: str) -> requests.Response:
     """Un appel WCS espacé de MIN_INTERVAL, avec reprise sur 429 (quota partagé)."""
     global _last_call
-    for attempt in range(8):
+    for attempt in range(20):
         wait = _last_call + MIN_INTERVAL - time.time()
         if wait > 0:
             time.sleep(wait)
         _last_call = time.time()
         response = session.get(BASE + query, headers={"apikey": key, "User-Agent": UA}, timeout=(15, 120))
         if response.status_code == 429:
-            print(f"Quota Météo-France atteint, attente 25 s ({attempt + 1}/8).", flush=True)
-            time.sleep(25)
+            # Fenêtre d'une minute : on attend la fin de la minute annoncée ("after ... 08:49:00").
+            seconds = 20
+            match = re.search(r"after \S+ (\d{2}):(\d{2}):(\d{2})", response.text)
+            if match:
+                now = datetime.now(timezone.utc)
+                target = now.replace(hour=int(match[1]), minute=int(match[2]), second=int(match[3]), microsecond=0)
+                seconds = max(5, min(70, (target - now).total_seconds() + 3))
+            print(f"Quota Météo-France atteint, attente {seconds:.0f} s ({attempt + 1}/20).", flush=True)
+            time.sleep(seconds)
             continue
         return response
-    raise Quota("Quota Météo-France épuisé après 8 tentatives")
+    raise Quota("Quota Météo-France épuisé après 20 tentatives")
 
 
 def latest_runs(session: requests.Session, key: str) -> dict[str, str]:
@@ -166,7 +173,9 @@ def main() -> int:
                 key,
             )
             if response.status_code != 200 or response.content[:4] != b"GRIB":
-                print(f"{short} {stamp}: HTTP {response.status_code}, ignoré", flush=True)
+                # 404 : échéance sans donnée pour ce produit (les cumuls n'existent qu'à partir de leur durée).
+                if response.status_code != 404:
+                    print(f"{short} {stamp}: HTTP {response.status_code}, ignoré", flush=True)
                 continue
             grid = decode(response.content)
             shape = shape or grid.shape

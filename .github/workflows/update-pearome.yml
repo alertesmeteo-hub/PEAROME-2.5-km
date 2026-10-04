@@ -38,6 +38,10 @@ jobs:
           FORCE: ${{ inputs.force }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          if [ -z "$METEOFRANCE_PAQUET_API_KEY" ]; then
+            echo "::warning title=Secret manquant::Ajoutez METEOFRANCE_PAQUET_API_KEY dans Settings > Secrets and variables > Actions pour activer PEAROME."
+            exit 0
+          fi
           args=()
           if [ "$FORCE" = 'true' ]; then args+=(--force); fi
           python scripts/update_pearome.py \
