@@ -231,4 +231,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Quota as exc:
+        # Quota partagé avec les autres workflows : on garde les données publiées et on réessaiera au prochain cycle.
+        print(f"::warning::{exc} - données précédentes conservées, nouvel essai au prochain cycle.")
+        sys.exit(0)
