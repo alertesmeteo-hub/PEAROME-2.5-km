@@ -41,6 +41,11 @@ PRODUCTS = [
     ("p06_60", "N_PROBA_PRECI06_60__GROUND_OR_WATER_SURFACE", "Pluie 6 h ≥ 60 mm", "pluie6", 60),
     ("p06_100", "N_PROBA_PRECI06_100__GROUND_OR_WATER_SURFACE", "Pluie 6 h ≥ 100 mm", "pluie6", 100),
     ("p01_20", "N_PROBA_PRECI01_20__GROUND_OR_WATER_SURFACE", "Pluie 1 h ≥ 20 mm", "pluie1", 20),
+    # Orages : probabilité de réflectivité radar simulée élevée (averses orageuses), de grêle et de supercellules.
+    ("rfx40", "N_PROBA_RFX_40DBZ__GROUND_OR_WATER_SURFACE", "Orages / fortes averses (réflectivité ≥ 40 dBZ)", "orages", 40),
+    ("rfx45", "N_PROBA_RFX_45DBZ__GROUND_OR_WATER_SURFACE", "Orages forts (réflectivité ≥ 45 dBZ)", "orages", 45),
+    ("grele8", "N_PROBA_D_GRELE_8__GROUND_OR_WATER_SURFACE", "Grêle (≥ 8 kg/m²)", "grele", 8),
+    ("scp1", "N_PROBA_D_SCP_1__GROUND_OR_WATER_SURFACE", "Supercellules (indice SCP > 1)", "supercellules", 1),
 ]
 
 _last_call = 0.0
