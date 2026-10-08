@@ -29,6 +29,11 @@ MIN_INTERVAL = 2.0
 
 # (id court, préfixe de couverture, libellé, famille, seuil)
 PRODUCTS = [
+    # Orages : probabilité de réflectivité radar simulée élevée (averses orageuses), de grêle et de supercellules.
+    ("rfx40", "N_PROBA_RFX_40DBZ__GROUND_OR_WATER_SURFACE", "Orages / fortes averses (réflectivité ≥ 40 dBZ)", "orages", 40),
+    ("rfx45", "N_PROBA_RFX_45DBZ__GROUND_OR_WATER_SURFACE", "Orages forts (réflectivité ≥ 45 dBZ)", "orages", 45),
+    ("grele8", "N_PROBA_D_GRELE_8__GROUND_OR_WATER_SURFACE", "Grêle (≥ 8 kg/m²)", "grele", 8),
+    ("scp1", "N_PROBA_D_SCP_1__GROUND_OR_WATER_SURFACE", "Supercellules (indice SCP > 1)", "supercellules", 1),
     ("raf40", "N_PROBA_RAF_40__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 40 km/h", "rafales", 40),
     ("raf50", "N_PROBA_RAF_50__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 50 km/h", "rafales", 50),
     ("raf70", "N_PROBA_RAF_70__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 70 km/h", "rafales", 70),
@@ -41,11 +46,6 @@ PRODUCTS = [
     ("p06_60", "N_PROBA_PRECI06_60__GROUND_OR_WATER_SURFACE", "Pluie 6 h ≥ 60 mm", "pluie6", 60),
     ("p06_100", "N_PROBA_PRECI06_100__GROUND_OR_WATER_SURFACE", "Pluie 6 h ≥ 100 mm", "pluie6", 100),
     ("p01_20", "N_PROBA_PRECI01_20__GROUND_OR_WATER_SURFACE", "Pluie 1 h ≥ 20 mm", "pluie1", 20),
-    # Orages : probabilité de réflectivité radar simulée élevée (averses orageuses), de grêle et de supercellules.
-    ("rfx40", "N_PROBA_RFX_40DBZ__GROUND_OR_WATER_SURFACE", "Orages / fortes averses (réflectivité ≥ 40 dBZ)", "orages", 40),
-    ("rfx45", "N_PROBA_RFX_45DBZ__GROUND_OR_WATER_SURFACE", "Orages forts (réflectivité ≥ 45 dBZ)", "orages", 45),
-    ("grele8", "N_PROBA_D_GRELE_8__GROUND_OR_WATER_SURFACE", "Grêle (≥ 8 kg/m²)", "grele", 8),
-    ("scp1", "N_PROBA_D_SCP_1__GROUND_OR_WATER_SURFACE", "Supercellules (indice SCP > 1)", "supercellules", 1),
 ]
 
 _last_call = 0.0
@@ -130,9 +130,13 @@ def decode(content: bytes) -> np.ndarray:
 
 
 def already_published(url: str, run_iso: str) -> bool:
+    """Run déjà publié en entier (une publication partielle, coupée par le quota, est complétée au passage suivant)."""
     try:
         r = requests.get(url, timeout=(10, 30), headers={"User-Agent": UA})
-        return r.status_code == 200 and r.json().get("run_time") == run_iso
+        if r.status_code != 200:
+            return False
+        index = r.json()
+        return index.get("run_time") == run_iso and index.get("complete", True) is True
     except (requests.RequestException, ValueError):
         return False
 
@@ -142,6 +146,7 @@ def main() -> int:
     parser.add_argument("--output-dir", default="build/pearome")
     parser.add_argument("--current-index-url", default="")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--cache-dir", default=".cache/pearome")
     args = parser.parse_args()
     key = os.environ.get("METEOFRANCE_PAQUET_API_KEY", "")
     if not key:
@@ -164,63 +169,102 @@ def main() -> int:
     out = Path(args.output_dir)
     (out / "products").mkdir(parents=True, exist_ok=True)
 
+    # Produits déjà récupérés pour CE run lors d'un passage précédent (coupé par le quota) : réutilisés tels quels.
+    cache = Path(args.cache_dir) / run_stamp
+    cache.mkdir(parents=True, exist_ok=True)
+    for old in Path(args.cache_dir).iterdir():  # runs précédents : inutiles
+        if old.is_dir() and old.name != run_stamp:
+            for f in old.iterdir():
+                f.unlink()
+            old.rmdir()
+
     products_meta = []
     shape: tuple[int, int] | None = None
-    for short, prefix, label, family, threshold in PRODUCTS:
-        if runs.get(prefix) != run_stamp:
-            continue
-        coverage = f"{prefix}___{run_stamp}"
-        times = describe_times(session, key, coverage)
-        steps = [t for t in times if t > run_dt and int((t - run_dt).total_seconds() // 3600) % STEP_H == 0]
-        entries = []
-        for t in steps:
-            stamp = t.strftime("%Y-%m-%dT%H:%M:%SZ")
-            response = call(
-                session,
-                f"GetCoverage?service=WCS&version=2.0.1&coverageid={coverage}&format=application%2Fwmo-grib"
-                f"&subset=time({stamp})&subset=lat({LAT0},{LAT1})&subset=long({LON0},{LON1})",
-                key,
-            )
-            if response.status_code != 200 or response.content[:4] != b"GRIB":
-                # 404 : échéance sans donnée pour ce produit (les cumuls n'existent qu'à partir de leur durée).
-                if response.status_code != 404:
-                    print(f"{short} {stamp}: HTTP {response.status_code}, ignoré", flush=True)
+    expected = [p for p in PRODUCTS if runs.get(p[1]) == run_stamp]
+    partial = False
+    for short, prefix, label, family, threshold in expected:
+        cached = cache / f"{short}.json"
+        if cached.is_file():
+            try:
+                saved = json.loads(cached.read_text(encoding="utf-8"))
+                (out / "products" / f"{short}.json").write_text(json.dumps(saved["product"], separators=(",", ":")), encoding="utf-8")
+                products_meta.append(saved["meta"])
+                shape = shape or tuple(saved["shape"])
+                print(f"{short}: repris du cache", flush=True)
                 continue
-            grid = decode(response.content)
-            shape = shape or grid.shape
-            if grid.shape != shape:
-                continue
-            grid = np.clip(np.nan_to_num(grid, nan=0.0), 0, 100)
-            entries.append(
-                {
-                    "time": stamp,
-                    "lead": int((t - run_dt).total_seconds() // 3600),
-                    "max": round(float(grid.max()), 1),
-                    "mean": round(float(grid.mean()), 1),
-                    "data": base64.b64encode(np.rint(grid).astype(np.uint8).tobytes()).decode("ascii"),
-                }
-            )
-        print(f"{short}: {len(entries)} échéances", flush=True)
-        if not entries:
+            except (ValueError, KeyError, OSError):
+                cached.unlink(missing_ok=True)
+        try:
+            result = fetch_product(session, key, run_stamp, run_dt, short, prefix, label, family, threshold, shape)
+        except Quota as exc:
+            # Quota épuisé : on publie ce qui a été obtenu, le passage suivant complétera grâce au cache.
+            print(f"::warning::{exc} - publication partielle ({len(products_meta)}/{len(expected)} produits), suite au prochain passage.", flush=True)
+            partial = True
+            break
+        if result is None:
             continue
-        (out / "products" / f"{short}.json").write_text(
-            json.dumps({"id": short, "label": label, "family": family, "threshold": threshold, "steps": entries}, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        products_meta.append(
-            {
-                "id": short,
-                "label": label,
-                "family": family,
-                "threshold": threshold,
-                "file": f"products/{short}.json",
-                "max": max(e["max"] for e in entries),
-                "steps": len(entries),
-            }
-        )
+        product, meta, shape = result
+        (out / "products" / f"{short}.json").write_text(json.dumps(product, separators=(",", ":")), encoding="utf-8")
+        cached.write_text(json.dumps({"product": product, "meta": meta, "shape": list(shape)}, separators=(",", ":")), encoding="utf-8")
+        products_meta.append(meta)
     if not products_meta or shape is None:
+        if partial:
+            raise Quota("Quota Météo-France épuisé avant le premier produit")
         print("Aucun produit récupéré", file=sys.stderr)
         return 1
+    return write_index(out, run_iso, shape, products_meta, complete=not partial)
+
+
+def fetch_product(session, key, run_stamp, run_dt, short, prefix, label, family, threshold, shape):
+    """Toutes les échéances d'un produit ; None si aucune n'est disponible."""
+    coverage = f"{prefix}___{run_stamp}"
+    times = describe_times(session, key, coverage)
+    steps = [t for t in times if t > run_dt and int((t - run_dt).total_seconds() // 3600) % STEP_H == 0]
+    entries = []
+    for t in steps:
+        stamp = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        response = call(
+            session,
+            f"GetCoverage?service=WCS&version=2.0.1&coverageid={coverage}&format=application%2Fwmo-grib"
+            f"&subset=time({stamp})&subset=lat({LAT0},{LAT1})&subset=long({LON0},{LON1})",
+            key,
+        )
+        if response.status_code != 200 or response.content[:4] != b"GRIB":
+            # 404 : échéance sans donnée pour ce produit (les cumuls n'existent qu'à partir de leur durée).
+            if response.status_code != 404:
+                print(f"{short} {stamp}: HTTP {response.status_code}, ignoré", flush=True)
+            continue
+        grid = decode(response.content)
+        shape = shape or grid.shape
+        if grid.shape != shape:
+            continue
+        grid = np.clip(np.nan_to_num(grid, nan=0.0), 0, 100)
+        entries.append(
+            {
+                "time": stamp,
+                "lead": int((t - run_dt).total_seconds() // 3600),
+                "max": round(float(grid.max()), 1),
+                "mean": round(float(grid.mean()), 1),
+                "data": base64.b64encode(np.rint(grid).astype(np.uint8).tobytes()).decode("ascii"),
+            }
+        )
+    print(f"{short}: {len(entries)} échéances", flush=True)
+    if not entries:
+        return None
+    product = {"id": short, "label": label, "family": family, "threshold": threshold, "steps": entries}
+    meta = {
+        "id": short,
+        "label": label,
+        "family": family,
+        "threshold": threshold,
+        "file": f"products/{short}.json",
+        "max": max(e["max"] for e in entries),
+        "steps": len(entries),
+    }
+    return product, meta, shape
+
+
+def write_index(out: Path, run_iso: str, shape, products_meta, complete: bool) -> int:
     index = {
         "schema_version": 1,
         "status": "ok",
@@ -232,10 +276,12 @@ def main() -> int:
         "height": shape[0],
         "width": shape[1],
         "step_hours": STEP_H,
+        # False : publication coupée par le quota, complétée au passage suivant (voir already_published).
+        "complete": complete,
         "products": products_meta,
     }
     (out / "index.json").write_text(json.dumps(index, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
-    print(f"PEAROME {run_iso} : {len(products_meta)} produits, grille {shape[1]}x{shape[0]}.")
+    print(f"PEAROME {run_iso} : {len(products_meta)} produits{'' if complete else ' (partiel)'}, grille {shape[1]}x{shape[0]}.")
     return 0
 
 

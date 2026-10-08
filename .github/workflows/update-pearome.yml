@@ -20,7 +20,8 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Le quota Météo-France est partagé avec AROME : un passage peut attendre longtemps (et reprendre via le cache).
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
@@ -31,6 +32,13 @@ jobs:
 
       - name: Installer les dépendances
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Reprendre les produits déjà récupérés (run en cours)
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/pearome
+          key: pearome-${{ github.run_id }}
+          restore-keys: pearome-
 
       - name: Récupérer les probabilités PEAROME
         env:
@@ -60,6 +68,13 @@ jobs:
             echo "Erreur réseau passagère (tentative $attempt), nouvelle tentative dans 90 s"
             sleep 90
           done
+
+      - name: Conserver les produits récupérés (même en cas d'arrêt)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/pearome
+          key: pearome-${{ github.run_id }}
 
       - name: Publier sur la branche data
         env:
