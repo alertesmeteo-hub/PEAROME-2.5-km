@@ -24,6 +24,12 @@ BASE = "https://public-api.meteofrance.fr/public/pearome/1.0/wcs/MF-NWP-HIGHRES-
 UA = "Mozilla/5.0 (compatible; AlertesMeteo-PEAROME/1.0)"
 LAT0, LAT1, LON0, LON1 = 41.9, 43.3, 1.4, 3.5
 STEP_H = 3
+# Grandeurs horaires (rafale de l'heure, pluie de l'heure) : publiées au pas de 3 h, mais en prenant pour chaque pixel la
+# probabilité la plus forte des 3 heures de la tranche. Avec la seule heure ronde, un pic tombé entre deux (rafales de
+# 72-78 km/h prévues par AROME vers 14 h UTC le 21 oct. 2026, PEAROME lu à 12 h et 15 h) n'apparaissait pas.
+FAMILLES_HORAIRES = {"rafales", "pluie1"}
+# Change quand le calcul d'un produit change : les produits gardés en cache par un passage précédent sont alors refaits.
+CACHE_VERSION = "v2"
 # Environ 30 appels/min : le quota du portail est partagé avec d'autres pipelines.
 MIN_INTERVAL = 2.0
 
@@ -183,7 +189,7 @@ def main() -> int:
     expected = [p for p in PRODUCTS if runs.get(p[1]) == run_stamp]
     partial = False
     for short, prefix, label, family, threshold in expected:
-        cached = cache / f"{short}.json"
+        cached = cache / f"{short}.{CACHE_VERSION}.json"
         if cached.is_file():
             try:
                 saved = json.loads(cached.read_text(encoding="utf-8"))
@@ -215,30 +221,48 @@ def main() -> int:
     return write_index(out, run_iso, shape, products_meta, complete=not partial)
 
 
+def fetch_grid(session, key, coverage, short, t):
+    """Grille (probabilités 0-100) d'un instant ; None si l'échéance n'a pas de donnée."""
+    stamp = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+    response = call(
+        session,
+        f"GetCoverage?service=WCS&version=2.0.1&coverageid={coverage}&format=application%2Fwmo-grib"
+        f"&subset=time({stamp})&subset=lat({LAT0},{LAT1})&subset=long({LON0},{LON1})",
+        key,
+    )
+    if response.status_code != 200 or response.content[:4] != b"GRIB":
+        # 404 : échéance sans donnée pour ce produit (les cumuls n'existent qu'à partir de leur durée).
+        if response.status_code != 404:
+            print(f"{short} {stamp}: HTTP {response.status_code}, ignoré", flush=True)
+        return None
+    return np.clip(np.nan_to_num(decode(response.content), nan=0.0), 0, 100)
+
+
 def fetch_product(session, key, run_stamp, run_dt, short, prefix, label, family, threshold, shape):
     """Toutes les échéances d'un produit ; None si aucune n'est disponible."""
     coverage = f"{prefix}___{run_stamp}"
     times = describe_times(session, key, coverage)
+    disponibles = set(times)
     steps = [t for t in times if t > run_dt and int((t - run_dt).total_seconds() // 3600) % STEP_H == 0]
+    horaire = family in FAMILLES_HORAIRES
     entries = []
     for t in steps:
         stamp = t.strftime("%Y-%m-%dT%H:%M:%SZ")
-        response = call(
-            session,
-            f"GetCoverage?service=WCS&version=2.0.1&coverageid={coverage}&format=application%2Fwmo-grib"
-            f"&subset=time({stamp})&subset=lat({LAT0},{LAT1})&subset=long({LON0},{LON1})",
-            key,
-        )
-        if response.status_code != 200 or response.content[:4] != b"GRIB":
-            # 404 : échéance sans donnée pour ce produit (les cumuls n'existent qu'à partir de leur durée).
-            if response.status_code != 404:
-                print(f"{short} {stamp}: HTTP {response.status_code}, ignoré", flush=True)
+        # Grandeur horaire : les 3 heures de la tranche (t-2 h, t-1 h, t), maximum pixel par pixel.
+        instants = [t - timedelta(hours=h) for h in range(STEP_H - 1, -1, -1)] if horaire else [t]
+        grilles = []
+        for u in instants:
+            if u <= run_dt or u not in disponibles:
+                continue
+            g = fetch_grid(session, key, coverage, short, u)
+            if g is None:
+                continue
+            shape = shape or g.shape
+            if g.shape == shape:
+                grilles.append(g)
+        if not grilles:
             continue
-        grid = decode(response.content)
-        shape = shape or grid.shape
-        if grid.shape != shape:
-            continue
-        grid = np.clip(np.nan_to_num(grid, nan=0.0), 0, 100)
+        grid = np.max(np.stack(grilles), axis=0)
         entries.append(
             {
                 "time": stamp,
@@ -251,12 +275,15 @@ def fetch_product(session, key, run_stamp, run_dt, short, prefix, label, family,
     print(f"{short}: {len(entries)} échéances", flush=True)
     if not entries:
         return None
-    product = {"id": short, "label": label, "family": family, "threshold": threshold, "steps": entries}
+    # window_hours : chaque échéance donne la probabilité la plus forte des N heures qui la précèdent (1 = l'heure ronde).
+    window = STEP_H if horaire else 1
+    product = {"id": short, "label": label, "family": family, "threshold": threshold, "window_hours": window, "steps": entries}
     meta = {
         "id": short,
         "label": label,
         "family": family,
         "threshold": threshold,
+        "window_hours": window,
         "file": f"products/{short}.json",
         "max": max(e["max"] for e in entries),
         "steps": len(entries),
