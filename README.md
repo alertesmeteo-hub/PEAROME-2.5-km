@@ -5,6 +5,8 @@ WCS) pour le dernier run et publie, sur la branche `data`, un JSON compact par p
 
 - `index.json` : run, fenêtre géographique, produits disponibles ;
 - `products/<id>.json` : probabilité (0 à 100 %) de dépasser le seuil, un tableau par échéance (pas de 3 h).
+  Rafales et pluie sur 1 h (grandeurs horaires) : probabilité la plus forte des 3 heures de la tranche, pixel par
+  pixel (`window_hours: 3`), pour ne pas manquer un pic tombé entre deux heures rondes.
 
 Produits : rafales ≥ 40/50/70 km/h, pluie 24 h ≥ 20/50/80/120/200 mm, pluie 6 h ≥ 20/60/100 mm,
 pluie 1 h ≥ 20 mm.
