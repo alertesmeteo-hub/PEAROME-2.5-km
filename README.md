@@ -8,7 +8,7 @@ WCS) pour le dernier run et publie, sur la branche `data`, un JSON compact par p
   Rafales et pluie sur 1 h (grandeurs horaires) : probabilité la plus forte des 3 heures de la tranche, pixel par
   pixel (`window_hours: 3`), pour ne pas manquer un pic tombé entre deux heures rondes.
 
-Produits : rafales ≥ 40/50/70 km/h, pluie 24 h ≥ 20/50/80/120/200 mm, pluie 6 h ≥ 20/60/100 mm,
+Produits : rafales ≥ 56/74/93/111/130 km/h (seuils Météo-France de 30/40/50/60/70 nœuds), pluie 24 h ≥ 20/50/80/120/200 mm, pluie 6 h ≥ 20/60/100 mm,
 pluie 1 h ≥ 20 mm.
 
 L'API ne fournit pas les membres un par un : ce sont des probabilités, pas des scénarios.

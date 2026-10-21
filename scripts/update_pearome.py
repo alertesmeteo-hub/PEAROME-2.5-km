@@ -29,7 +29,7 @@ STEP_H = 3
 # 72-78 km/h prévues par AROME vers 14 h UTC le 21 oct. 2026, PEAROME lu à 12 h et 15 h) n'apparaissait pas.
 FAMILLES_HORAIRES = {"rafales", "pluie1"}
 # Change quand le calcul d'un produit change : les produits gardés en cache par un passage précédent sont alors refaits.
-CACHE_VERSION = "v2"
+CACHE_VERSION = "v3"
 # Environ 30 appels/min : le quota du portail est partagé avec d'autres pipelines.
 MIN_INTERVAL = 2.0
 
@@ -40,9 +40,13 @@ PRODUCTS = [
     ("rfx45", "N_PROBA_RFX_45DBZ__GROUND_OR_WATER_SURFACE", "Orages forts (réflectivité ≥ 45 dBZ)", "orages", 45),
     ("grele8", "N_PROBA_D_GRELE_8__GROUND_OR_WATER_SURFACE", "Grêle (≥ 8 kg/m²)", "grele", 8),
     ("scp1", "N_PROBA_D_SCP_1__GROUND_OR_WATER_SURFACE", "Supercellules (indice SCP > 1)", "supercellules", 1),
-    ("raf40", "N_PROBA_RAF_40__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 40 km/h", "rafales", 40),
-    ("raf50", "N_PROBA_RAF_50__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 50 km/h", "rafales", 50),
-    ("raf70", "N_PROBA_RAF_70__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 70 km/h", "rafales", 70),
+    # Rafales : seuils de Météo-France en NŒUDS (« Wind gust more than 50kt probability », DescribeCoverage du
+    # 21 oct. 2026), convertis en km/h (1 nœud = 1,852 km/h) ; ils étaient affichés à tort comme des km/h.
+    ("raf30", "N_PROBA_RAF_30__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 56 km/h (30 nœuds)", "rafales", 56),
+    ("raf40", "N_PROBA_RAF_40__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 74 km/h (40 nœuds)", "rafales", 74),
+    ("raf50", "N_PROBA_RAF_50__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 93 km/h (50 nœuds)", "rafales", 93),
+    ("raf60", "N_PROBA_RAF_60__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 111 km/h (60 nœuds)", "rafales", 111),
+    ("raf70", "N_PROBA_RAF_70__SPECIFIC_HEIGHT_LEVEL_ABOVE_GROUND", "Rafales ≥ 130 km/h (70 nœuds)", "rafales", 130),
     ("p24_20", "N_PROBA_PRECI24_20__GROUND_OR_WATER_SURFACE", "Pluie 24 h ≥ 20 mm", "pluie24", 20),
     ("p24_50", "N_PROBA_PRECI24_50__GROUND_OR_WATER_SURFACE", "Pluie 24 h ≥ 50 mm", "pluie24", 50),
     ("p24_80", "N_PROBA_PRECI24_80__GROUND_OR_WATER_SURFACE", "Pluie 24 h ≥ 80 mm", "pluie24", 80),
